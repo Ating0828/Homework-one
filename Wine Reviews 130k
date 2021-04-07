@@ -1,0 +1,250 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+
+
+import random
+import pandas as pd
+import numpy as np
+from collections import Counter
+import matplotlib
+import matplotlib.pyplot as plt
+from scipy import stats
+
+
+
+
+data = pd.read_csv('winemag-data-130k-v2.csv')  # 读取数据
+data.head(5)
+
+
+# # 数据可视化和摘要
+# ### 标称属性
+
+
+nominal_attr = ['country', 'description', 'designation', 'province', 'region_1', 'region_2', 'taster_name', 'taster_twitter_handle', 'title', 'variety', 'winery']
+for attr in nominal_attr:
+    y = [x for x in data[attr] if x == x]
+    attr_dict = dict(Counter(y))
+    print(f'属性{attr}取值及频数：{attr_dict}')
+
+
+# ### 数值属性
+
+numeric_attr = ['points', 'price']  # 数值属性标签
+
+
+# 统计数值属性的5数概括和缺失值
+
+for attr in numeric_attr:
+    print(f'属性{attr}数据摘要：')
+    miscnt, y = 0, []
+    for x in data[attr]:
+        if x != x:
+            miscnt += 1
+        else:
+            y.append(x)
+    y_mean = np.mean(y)
+    print(f'均值：{y_mean}')
+    y_median = np.median(y)
+    print(f'中位数：{y_median}')
+    y_min = np.min(y)
+    print(f'最小值：{y_min}')
+    y_max = np.max(y)
+    print(f'最大值：{y_max}')
+    y_mode = np.argmax(np.bincount(y))
+    print(f'众数：{y_mode}')
+    print(f"5数概括（最小值、1/4、中位数、3/4、最大值）：{np.percentile(y, (0, 25, 50, 75, 100), interpolation='midpoint')}")
+    print(f'缺失数：{miscnt}')
+    print('==================================================================================')
+    
+def draw_hist_points(data, Title, Xlabel, Ylabel, Xmin, Xmax, Ymin, Ymax):
+    plt.hist(data, 100)
+    plt.xlabel(Xlabel)
+    plt.xlim(Xmin, Xmax)
+    plt.ylabel(Ylabel)
+    plt.ylim(Ymin, Ymax)
+    plt.title(Title)
+    plt.show()
+
+def draw_hist_price(data, Title, Xlabel, Ylabel, Xmin, Xmax, Ymin, Ymax):
+    plt.hist(data, 3300)
+    plt.xlabel(Xlabel)
+    plt.xlim(Xmin, Xmax)
+    plt.ylabel(Ylabel)
+    plt.ylim(Ymin, Ymax)
+    plt.title(Title)
+    plt.show()
+
+
+# 为数值属性实现数据可视化，绘制直方图、盒图、QQ图
+
+# In[58]:
+
+
+for attr in numeric_attr:
+    y = [x for x in data[attr] if x == x]
+    # 绘制直方图
+    if attr == 'points':
+        draw_hist_points(y, attr, attr, 'number', np.min(y), np.max(y), 0.0, 25000)
+    else:  # price
+        draw_hist_price(y, attr, attr, 'number', np.min(y), 250, 0.0, 8000)
+    pd.DataFrame({attr: y}).boxplot(), plt.title(attr), plt.show()  # 绘制盒图
+    stats.probplot(y, dist="norm", plot=plt), plt.title(attr), plt.show()  # QQ图
+
+
+# # 数据缺失的处理
+# ### 将缺失部分剔除
+
+
+data_ = data[numeric_attr].dropna()
+lost_attr = ['price']
+print(f'删除前条数={data.shape[0]}，删除后条数={data_.shape[0]}')
+
+
+# 为数值属性实现数据可视化
+
+for attr in lost_attr:
+    y = [x for x in data_[attr]]
+    draw_hist_price(y, attr, attr, 'number', np.min(y), 250, 0.0, 8000)  # 绘制直方图
+    pd.DataFrame({attr: y}).boxplot(), plt.title(attr), plt.show()  # 绘制盒图
+    stats.probplot(y, dist="norm", plot=plt), plt.title(attr), plt.show()  # QQ图
+
+
+# ### 用最高频率值来填补缺失值
+
+# 对于数值属性，使用高频率值填补缺失值并可视化
+for attr in lost_attr:
+    y = [x for x in data_[attr]]
+    y_mode = np.argmax(np.bincount(y))  # 计算众数
+    y = []
+    for x in data[attr]:
+        if x != x:
+            x = y_mode  # 对于缺失值使用众数补充
+        y.append(x)
+    draw_hist_price(y, attr, attr, 'number', np.min(y), 250, 0.0, 8000)  # 绘制直方图
+    pd.DataFrame({attr: y}).boxplot(), plt.title(attr), plt.show()  # 绘制盒图
+    stats.probplot(y, dist="norm", plot=plt), plt.title(attr), plt.show()  # QQ图
+
+
+# 对于标称属性，使用高频率值填补缺失值
+
+data_ = data[nominal_attr]
+for attr in nominal_attr:
+    y = [x for x in data_[attr] if x == x]
+    y_mode = stats.mode(y)[0][0]
+    data_[attr] = data_[attr].fillna(y_mode)
+data_.head(5)
+
+
+# ### 通过属性的相关关系来填补缺失值
+
+
+data_ = data.dropna() # 丢弃无效数据
+
+A = hash('I am OK')
+
+for attr in nominal_attr:
+    data_[attr] = data_[attr].map(lambda x: hash(x) % 19260817).astype(int)
+data_.corr()
+
+
+# 确认`price`属性和`points`属性相似度最高，因此以`points`属性来预测`price`属性：
+# - 为price维护关于points的字典序列，记录每种point对应的price均值，最后填补时使用字典里与该条属性point相近的price
+data_ = data[numeric_attr].dropna()
+points_dict = {}
+for index, row in data_.iterrows():
+    point = int(row['points'])
+    price = row['price']
+    if point not in points_dict:
+        points_dict[point] = []
+    points_dict[point].append(price)
+for k, v in points_dict.items():
+    points_dict[k] = np.mean(v)
+points_dict = dict(sorted(points_dict.items(), key=lambda x: x[0], reverse=False))
+print(points_dict)
+
+# 为point估算price
+def calc_price(point):
+    res, cnt = 0, 0
+    for k, v in points_dict.items():
+        if abs(point - k) < 3:
+            res += v
+            cnt += 1
+    return res / cnt
+calc_price(91)
+
+y = []
+for index, row in data.iterrows():
+    point = int(row['points'])
+    price = row['price']
+    if price != price:
+        price = calc_price(point)  # 对于缺失值使用与point相似的price补充
+    y.append(price)
+draw_hist_price(y, attr, attr, 'number', np.min(y), 250, 0.0, 8000)  # 绘制直方图
+pd.DataFrame({'price': y}).boxplot(), plt.title('price'), plt.show()  # 绘制盒图
+stats.probplot(y, dist="norm", plot=plt), plt.title('price'), plt.show()  # QQ图
+
+
+# ### 通过数据对象之间的相似性来填补缺失值
+
+# 定义哈希函数，将数据集中每条数据哈希成N维平面的一个点，对于price缺失的数据使用KNN查找平面中与之最相似的数据填补
+
+data_ = data
+
+# 对于标称属性，使用高频率值填补缺失值
+for attr in nominal_attr:
+    y = [x for x in data_[attr] if x == x]
+    y_mode = stats.mode(y)[0][0]
+    data_[attr] = data_[attr].fillna(y_mode)
+train_data_ = data_.dropna()
+
+# 哈希数据
+for attr in nominal_attr:
+    train_data_[attr] = train_data_[attr].map(lambda x: hash(x) % 19260817).astype(int)
+train_data_.head(5)
+
+
+# 使用未缺失的数据用于训练KNN，定义price为预测标签，其余属性为特征，划分训练数据与测试数据并训练
+
+feature_attr = ['country', 'description', 'designation', 'points', 'province', 'region_1', 'region_2', 'taster_name', 'taster_twitter_handle', 'title', 'variety', 'winery']
+label_attr = ['price']
+
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+
+X = train_data_[feature_attr]
+Y = train_data_[label_attr]
+
+knn = KNeighborsClassifier(n_neighbors=10)
+knn.fit(X, Y)
+
+def predict(x):  # 预测函数
+    Z = {}
+    for attr in feature_attr:
+        y = x[attr]
+        if attr in nominal_attr:
+            B = hash('I am OK')
+            assert A == B
+            y = hash(y) % 19260817
+        Z[attr] = y
+    return knn.predict(pd.DataFrame(Z, index=[0]))[0]
+predict(data_.iloc[0])
+
+
+# 对于每条price缺失的数据，使用KNN预测的结果填补，并可视化结果
+
+# In[68]:
+
+
+y = []
+for index, row in data.iterrows():
+    point = int(row['points'])
+    price = row['price']
+    if price != price:
+        price = predict(row)  # 对于缺失值使用与point相似的price补充
+    y.append(price)
+draw_hist_price(y, attr, attr, 'number', np.min(y), 250, 0.0, 8000)  # 绘制直方图
+pd.DataFrame({'price': y}).boxplot(), plt.title('price'), plt.show()  # 绘制盒图
+stats.probplot(y, dist="norm", plot=plt), plt.title('price'), plt.show()  # QQ图
+
