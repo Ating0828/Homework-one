@@ -1,0 +1,280 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# # Chicago Building Violations数据集探索性分析
+
+import random
+import pandas as pd 
+import numpy as np
+from collections import Counter
+import matplotlib
+import matplotlib.pyplot as plt
+from scipy import stats
+from datetime import datetime
+
+
+# # 读取数据集building-violations.csv，显示数据集基本信息
+
+
+data = pd.read_csv('building-violations.csv')#读取数据
+nRow, nCol = data.shape
+print(f'There are {nRow} rows and {nCol} columns')#数据集行列
+data.head(5)#展示前五行数据
+
+
+# In[3]:
+
+
+data.info() #数据集各属性值类型及非空个数
+
+
+def time2stamp(cmnttime):   #转时间戳函数
+    a=cmnttime.replace('T',' ')
+   # print(a[0:19])
+    cmnttime=datetime.strptime(a[0:19],'%Y-%m-%d %H:%M:%S')
+    stamp=int(datetime.timestamp(cmnttime))
+    return stamp
+
+
+# ## 对部分属性进行类型转换
+
+
+data['VIOLATION LAST MODIFIED DATE'] = data['VIOLATION LAST MODIFIED DATE'].apply(time2stamp)
+data['VIOLATION DATE'] = data['VIOLATION DATE'].apply(time2stamp) #对两个日期属性转化为时间戳属性
+
+
+
+data.info() 
+
+
+# #  数据可视化和摘要
+# 
+# ### 标称属性
+
+
+nominal_attr = ['VIOLATION STATUS','VIOLATION DESCRIPTION','VIOLATION LOCATION','VIOLATION INSPECTOR COMMENTS','VIOLATION ORDINANCE','INSPECTOR ID','INSPECTION STATUS','INSPECTION WAIVED','INSPECTION CATEGORY','DEPARTMENT BUREAU','ADDRESS','STREET NUMBER','STREET DIRECTION','STREET NAME','STREET TYPE','Zip Codes','Boundaries - ZIP Codes']
+for attr in nominal_attr:
+    y = [x for x in data[attr]]
+    attr_dict = dict(Counter(y))
+    print(f'属性{attr}取值及频数：{attr_dict}')
+
+
+
+
+def calc_mode(x):
+    attr_dict = dict(Counter(x))
+    res, mx = 0, 0
+    for k, v in attr_dict.items():
+        if v > mx:
+            res = k
+            mx = v
+    return res
+
+
+numeric_attr = ['VIOLATION LAST MODIFIED DATE','VIOLATION DATE','SSA','LATITUDE','LONGITUDE','Community Areas','Census Tracts','Wards','Historical Wards 2003-2015']
+misCount = []
+argMax = []
+for attr in numeric_attr:
+    print(f'属性{attr}数据摘要：')
+    miscnt, y = 0, []
+    for x in data[attr]:
+        if x != x:
+            miscnt += 1
+        else:
+            y.append(x)
+    misCount.append(miscnt)
+    y_mean = np.mean(y)
+    print(f'均值：{y_mean}')
+    y_median = np.median(y)
+    print(f'中位数：{y_median}')
+    y_min = np.min(y)
+    print(f'最小值：{y_min}')
+    y_max = np.max(y)
+    print(f'最大值：{y_max}')
+    y_mode = calc_mode(y)
+    print(f'众数：{y_mode}')
+    argMax.append(y_mode)
+    print(f"5数概括（最小值、1/4、中位数、3/4、最大值）：{np.percentile(y, (0, 25, 50, 75, 100), interpolation='midpoint')}")
+    print(f'缺失数：{miscnt}')
+    print('==================================================================================')
+
+
+
+
+print(argMax)
+
+
+# ## 数据可视化，绘制直方图、盒图
+
+# 绘制直方图
+def plotHistogram(df, nHistogramShown, nHistogramPerRow):
+    nunique = df.nunique()
+    df = df[[col for col in df if nunique[col] > 1 and nunique[col] < 100]] # 选择不同值在1~100间的进行绘制
+    nRow, nCol = df.shape
+    columnNames = list(df)
+    nHistRow = (nCol + nHistogramPerRow - 1) / nHistogramPerRow
+    plt.figure(num=None, figsize=(6*nHistogramPerRow, 8*nHistRow), dpi=80, facecolor='w', edgecolor='k')
+    for i in range(min(nCol, nHistogramShown)):
+        plt.subplot(nHistRow, nHistogramPerRow, i+1)
+        df.iloc[:,i].hist()
+        plt.ylabel('counts')
+        plt.xticks(rotation=90)
+        plt.title(f'{columnNames[i]} (column {i})')
+    plt.tight_layout(pad=1.0, w_pad=1.0, h_pad=1.0)
+    plt.show()
+
+
+plotHistogram(data,10,1)
+
+
+def plotbox(numeric_attr):
+    for attr in numeric_attr:
+        pd.DataFrame(data[attr]).boxplot()
+        plt.title(attr)
+        plt.show()  # 绘制盒
+
+
+plotbox(numeric_attr)
+
+
+# #  数据缺失的处理
+# 
+# ## 将缺失部分剔除
+
+
+data_ = data[numeric_attr].dropna()
+plotHistogram(data_,10,1) #绘制直方图
+
+
+# In[20]:
+
+
+plotbox(data_) #绘制盒图
+
+
+# ## 用最高频率值来填补缺失值
+
+
+lost_attr=['LATITUDE','LONGITUDE','Community Areas','Census Tracts','Wards','Historical Wards 2003-2015']
+data_=data[lost_attr]
+i = 3
+for attr in lost_attr:
+    y = [x for x in data_[attr]]
+    y_mode = argMax[i]  # 计算众数
+    data_[attr] = data_[attr].fillna(y_mode) # 对于缺失值使用众数补充
+
+
+
+plotHistogram(data_,10,1) #绘制直方图
+plotbox(data_) #绘制盒图
+
+
+# ## 通过属性的相关关系来填补缺失值
+
+
+data_ = data.dropna() # 丢弃无效数据
+
+for attr in nominal_attr:
+    data_[attr] = data_[attr].map(lambda x: hash(x) % 19260817).astype(int)
+data_.corr()
+
+
+# 以Historical Wards 2003-2015属性为例，与它最相关的属性为Community Areas,使用Community Areas预测Historical Wards 2003-2015
+
+data_ = data[lost_attr].dropna()
+areas_dict = {}
+for index, row in data_.iterrows():
+    areas = int(row['Community Areas'])
+    wards = row['Historical Wards 2003-2015']
+    if areas not in areas_dict:
+        areas_dict[areas] = []
+    areas_dict[areas].append(wards)
+for k, v in areas_dict.items():
+    areas_dict[k] = np.mean(v)
+areas_dict = dict(sorted(areas_dict.items(), key=lambda x: x[0], reverse=False))
+print(areas_dict)
+
+# 为areas估算wards
+def calc_wards(areas):
+    res, cnt = 0, 0
+    for k, v in areas_dict.items():
+        if abs(areas - k) < 3:
+            res += v
+            cnt += 1
+    return res / cnt
+calc_wards(20)
+
+def draw_hist_wards(data, Title, Xlabel, Ylabel, Xmin, Xmax, Ymin, Ymax):
+    plt.hist(data, 100)
+    plt.xlabel(Xlabel)
+    plt.xlim(Xmin, Xmax)
+    plt.ylabel(Ylabel)
+    plt.ylim(Ymin, Ymax)
+    plt.title(Title)
+    plt.show()
+y = []
+for index, row in data_.iterrows():
+    areas = int(row['Community Areas'])
+    wards = row['Historical Wards 2003-2015']
+    if wards != wards:
+        wards = calc_wards(areas)  # 对于缺失值使用与point相似的price补充
+    y.append(wards)
+draw_hist_wards(y, 'wards', 'wards', 'number', np.min(y), 60, 0.0, 100000)  # 绘制直方图
+pd.DataFrame({'wards': y}).boxplot(), plt.title('wards'), plt.show()  # 绘制盒图
+#stats.probplot(y, dist="norm", plot=plt), plt.title('wards'), plt.show()  # QQ图
+
+
+# ## 通过数据对象之间的相似性来填补缺失值
+# 
+# 定义哈希函数，将数据集中每条数据哈希成N维平面的一个点，对于Historical Wards 2003-2015缺失的数据使用KNN查找平面中与之最相似的数据填补
+train_data_ = data.dropna()
+
+# 哈希数据
+for attr in nominal_attr:
+    train_data_[attr] = train_data_[attr].map(lambda x: hash(x) % 19260817).astype(int)
+train_data_.head(5)
+
+
+# 使用未缺失的数据用于训练KNN，定义wards为预测标签，其余属性为特征，划分训练数据与测试数据并训练
+
+feature_attr = ['LATITUDE','LONGITUDE','Community Areas','Census Tracts','Wards']
+label_attr = ['Historical Wards 2003-2015']
+
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+
+X = train_data_[feature_attr]
+Y = train_data_[label_attr]
+
+knn = KNeighborsClassifier(n_neighbors=10)
+knn.fit(X, Y)
+
+def predict(x):  # 预测函数
+    #B = hash('I am OK')
+    #assert A == B
+    Z = {}
+    for attr in feature_attr:
+        y = x[attr]
+        if attr in nominal_attr:
+            y = hash(y) % 19260817
+        Z[attr] = y
+    return knn.predict(pd.DataFrame(Z, index=[0]))[0]
+predict(data_.iloc[0])
+
+
+# 对于每条price缺失的数据，使用KNN预测的结果填补，并可视化结果
+
+y = []
+for index, row in data.iterrows():
+    areas = int(row['Community Areas'])
+    wards = row['Historical Wards 2003-2015']
+    if wards != wards:
+        wards = predict(row)  # 对于缺失值使用与areas相似的wards补充
+    y.append(wards)
+draw_hist_wards(y, 'price', 'price', 'number', np.min(y), 60, 0.0, 100000)  # 绘制直方图
+pd.DataFrame({'wards': y}).boxplot(), plt.title('wards'), plt.show()  # 绘制盒图
+stats.probplot(y, dist="norm", plot=plt), plt.title('wards'), plt.show()  # QQ图
+
+
+
+
